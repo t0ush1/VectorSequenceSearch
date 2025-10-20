@@ -18,12 +18,10 @@ public:
 
     int M;
     int ef_construction;
-    int ef;
     hnswlib::SpaceInterface<dist_t>* space;
     SequenceHNSW<dist_t, slabel_t>* sequence_hnsw;
 
-    SequenceGraphIndex(int dim, int M = 16, int ef_construction = 200, int ef = 10)
-        : VSSIndex(dim), M(M), ef_construction(ef_construction), ef(ef) {}
+    SequenceGraphIndex(int dim, int M, int ef_construction) : VSSIndex(dim), M(M), ef_construction(ef_construction) {}
 
     ~SequenceGraphIndex() {
         delete sequence_hnsw;
@@ -37,7 +35,6 @@ public:
 
         space = new hnswlib::L2Space(dim);
         sequence_hnsw = new SequenceHNSW<dist_t, slabel_t>(space, base_dataset->size, M, ef_construction);
-        sequence_hnsw->ef = ef;
 
         // std::vector<std::pair<int, int>> ij_pair;
         // for (int i = 0; i < base_num; i++) {
@@ -84,7 +81,9 @@ public:
         }
     }
 
-    std::priority_queue<std::pair<float, int>> search(const float* q_data, int q_len, int k) override {
+    std::priority_queue<std::pair<float, int>> search(const float* q_data, int q_len, int k, int ef) override {
+        sequence_hnsw->ef = ef;
+
         std::priority_queue<std::pair<float, int>> result;
         auto candidates = sequence_hnsw->search_candidates(q_data, q_len);
         for (slabel_t id : candidates) {

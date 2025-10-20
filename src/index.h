@@ -13,7 +13,7 @@ public:
     VSSIndex(int dim) : dim(dim) {}
 
     virtual void build(const VSSDataset* base_dataset) = 0;
-    virtual std::priority_queue<std::pair<float, int>> search(const float* q_data, int q_len, int k) = 0;
+    virtual std::priority_queue<std::pair<float, int>> search(const float* q_data, int q_len, int k, int ef) = 0;
 };
 
 class RerankIndex : public VSSIndex {
@@ -44,13 +44,16 @@ public:
         build_index();
     }
 
-    std::priority_queue<std::pair<float, int>> search(const float* q_data, int q_len, int k) override {
-        int k_ = k / 2;
+    std::priority_queue<std::pair<float, int>> search(const float* q_data, int q_len, int k, int ef) override {
+        // int k_ = k / 2;
+        // std::unordered_set<int> candidates;
+        // while (candidates.size() < k && k_ <= base_vec_num) {
+        //     search_index(candidates, q_data, q_len, k_, ef);
+        //     k_ *= 2;
+        // }
+
         std::unordered_set<int> candidates;
-        while (candidates.size() < k && k_ <= base_vec_num) {
-            search_index(candidates, q_data, q_len, k_);
-            k_ *= 2;
-        }
+        search_index(candidates, q_data, q_len, ef, ef);
 
         std::priority_queue<std::pair<float, int>> result;
         for (int id : candidates) {
@@ -66,7 +69,7 @@ public:
 private:
     virtual void build_index() = 0;
 
-    virtual void search_index(std::unordered_set<int>& candidates, const float* q_data, int q_len, int k) = 0;
+    virtual void search_index(std::unordered_set<int>& candidates, const float* q_data, int q_len, int k, int ef) = 0;
 
     // TODO 持久化
 };
