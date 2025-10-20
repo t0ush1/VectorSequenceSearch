@@ -7,20 +7,27 @@
 
 #include "baselines/brute_force.h"
 #include "baselines/hnsw.h"
-// #include "baselines/ivfpq.h"
+#include "baselines/ivfpq.h"
 #include "dataset.h"
 #include "index.h"
 #include "sequence_graph.h"
+
+#include "baselines/my_hnsw_rerank.h"
 
 namespace vss {
 class VSSRunner {
 public:
     struct QueryRecord {
         int ef;
+        int q_num;
+
         size_t time;
+
         int hit;
         int total;
-        int q_num;
+
+        long hops;
+        long dist_comps;
     };
 
     int dim;
@@ -47,10 +54,14 @@ public:
         } else if (index_name == "hnsw") {
             index = new HNSWIndex(dim, 16, 200);
             efs = {10, 20, 50, 100, 200, 500, 1000};
-            // } else if (index_name == "ivfpq") {
-            //     index = new IVFPQIndex(dim, 100, 8, 8, 10);
+        } else if (index_name == "ivfpq") {
+            index = new IVFPQIndex(dim, 100, 8, 8);
+            efs = {10, 20, 50, 100, 200, 500, 1000};
         } else if (index_name == "dtw") {
             index = new SequenceGraphIndex<float, int>(dim, 16, 200);
+            efs = {10, 20, 50, 100, 200, 500, 1000, 2000};
+        } else if (index_name == "my_hnsw") {
+            index = new MyHNSWIndex(dim, 16, 200);
             efs = {10, 20, 50, 100, 200, 500, 1000};
         } else {
             std::cerr << "Unknown index: " << index_name << std::endl;
@@ -74,29 +85,28 @@ public:
     }
 
     void run_search() {
-        std::vector<QueryRecord> records;
+        std::vector<QueryRecord> records(efs.size());
         int k = groundtruth[0].size();
 
-        for (int ef : efs) {
-            QueryRecord record = run_search_once(k, ef);
-            records.push_back(record);
+        for (int i = 0; i < efs.size(); i++) {
+            run_search_once(k, efs[i], records[i]);
         }
 
         for (const auto& r : records) {
             std::cout << "EF: " << r.ef << std::endl;
-            std::cout << "Tot Time: " << r.time << " us, Avg Time: " << r.time * 1.0 / r.q_num << " us" << std::endl;
+            std::cout << "Time: " << r.time << " us, Avg Time: " << r.time / r.q_num << " us" << std::endl;
             std::cout << "Recall: " << r.hit << "/" << r.total << "=" << r.hit * 1.0 / r.total << std::endl;
+            std::cout << "Hops: " << r.hops << ", Avg Hops: " << r.hops / r.q_num << std::endl;
+            std::cout << "Dist Comps: " << r.dist_comps << ", Avg Dist Comps: " << r.dist_comps / r.q_num << std::endl;
             std::cout << std::endl;
         }
 
         save_records(records);
     }
 
-    QueryRecord run_search_once(int k, int ef) {
-        size_t time = 0;
-        int hit = 0;
-        int total = 0;
-        int q_num = 0;
+    void run_search_once(int k, int ef, QueryRecord& record) {
+        record.ef = ef;
+        index->reset_metric();
 
         for (int i = 0; i < query_dataset->seq_num; i++) {
             auto [q_data, q_len] = query_dataset->get_sequence(i);
@@ -104,22 +114,23 @@ public:
             auto begin = std::chrono::high_resolution_clock::now();
             auto result = index->search(q_data, q_len, k, ef);
             auto end = std::chrono::high_resolution_clock::now();
-            time += std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
+            record.time += std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
+
+            record.hops += index->get_metric("hops");
+            record.dist_comps += index->get_metric("dist_comps");
 
             assert(result.size() <= k);
             while (result.size() > 0) {
                 int id = result.top().second;
                 result.pop();
                 if (groundtruth[i].find(id) != groundtruth[i].end()) {
-                    hit++;
+                    record.hit++;
                 }
             }
 
-            total += groundtruth[i].size();
-            q_num++;
+            record.total += groundtruth[i].size();
+            record.q_num++;
         }
-
-        return {ef, time, hit, total, q_num};
     }
 
     void save_records(std::vector<QueryRecord>& records) {
@@ -130,9 +141,10 @@ public:
         std::ofstream ofs(csv_path);
         cerr_if(!ofs.is_open(), "Failed to open " + csv_name);
 
-        ofs << "ef,time,hit,total,q_num" << std::endl;
+        ofs << "ef,time,hit,total,q_num,hops,distance_computations" << std::endl;
         for (const auto& r : records) {
-            ofs << r.ef << "," << r.time << "," << r.hit << "," << r.total << "," << r.q_num << std::endl;
+            ofs << r.ef << "," << r.time << "," << r.hit << "," << r.total << "," << r.q_num << "," << r.hops << ","
+                << r.dist_comps << std::endl;
         }
 
         ofs.close();

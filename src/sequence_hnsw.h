@@ -34,16 +34,6 @@ public:
         // bool operator<(const Status& other) const { return approx_dist < other.approx_dist; }
 
         // bool operator>(const Status& other) const { return approx_dist > other.approx_dist; }
-
-        bool operator==(const Status& other) const { return id == other.id && q_sidx == other.q_sidx; }
-
-        struct Hash {
-            size_t operator()(const Status& p) const {
-                auto hash1 = std::hash<id_t>{}(p.id);
-                auto hash2 = std::hash<int>{}(p.q_sidx);
-                return hash1 ^ (hash2 << 1);
-            }
-        };
     };
 
     class VisitedList {
@@ -71,6 +61,22 @@ public:
         ~VisitedList() { delete[] mass; }
     };
 
+    class VisitedStatus {
+    public:
+        size_t num_elements;
+        int32_t* mass;
+
+        VisitedStatus(size_t num_elements) : num_elements(num_elements), mass(new int32_t[num_elements]) {}
+
+        inline void reset() { memset(mass, 0, sizeof(int32_t) * num_elements); }
+
+        inline void visit(const Status& status) { mass[status.id] |= (1 << status.q_sidx); }
+
+        inline bool is_visited(const Status& status) const { return mass[status.id] & (1 << status.q_sidx); }
+
+        ~VisitedStatus() { delete[] mass; }
+    };
+
     size_t max_elements;
     size_t cur_elements;
 
@@ -88,6 +94,7 @@ public:
     int max_level;
     id_t enterpoint;
     VisitedList* visited_list;
+    VisitedStatus* visited_status;
 
     size_t size_links_level;
     size_t size_links_level0;
@@ -106,13 +113,12 @@ public:
     std::vector<int> id_to_sindex;
 
     std::default_random_engine level_generator;
-    std::default_random_engine update_probability_generator;
 
     long metric_distance_computations;
     long metric_hops;
 
     SequenceHNSW(hnswlib::SpaceInterface<dist_t>* space, size_t max_elements, size_t M = 16,
-                             size_t ef_construction = 200, size_t random_seed = 100) {
+                 size_t ef_construction = 200, size_t random_seed = 100) {
         this->max_elements = max_elements;
         this->cur_elements = 0;
 
@@ -130,6 +136,7 @@ public:
         this->max_level = -1;
         this->enterpoint = -1;
         this->visited_list = new VisitedList(max_elements);
+        this->visited_status = new VisitedStatus(max_elements);
 
         this->size_links_level = sizeof(linklist_t) + max_M * sizeof(id_t);
         this->size_links_level0 = sizeof(linklist_t) + (max_M0 + suc_M0) * sizeof(id_t);
@@ -147,7 +154,6 @@ public:
         this->id_to_sindex.resize(max_elements);
 
         this->level_generator.seed(random_seed);
-        this->update_probability_generator.seed(random_seed + 1);
 
         this->metric_distance_computations = 0;
         this->metric_hops = 0;
@@ -155,6 +161,7 @@ public:
 
     ~SequenceHNSW() {
         free(visited_list);
+        free(visited_status);
         free(elements);
         for (id_t i = 0; i < cur_elements; i++) {
             if (element_levels[i] > 0) {
@@ -248,7 +255,6 @@ public:
 
             if (collect_metrics) {
                 metric_hops++;
-                metric_distance_computations += size;
             }
 
 #ifdef USE_SSE
@@ -269,6 +275,10 @@ public:
                     continue;
                 }
                 visited_list->visit(nei_id);
+
+                if (collect_metrics) {
+                    metric_distance_computations++;
+                }
 
                 dist_t dist = fstdistfunc(query, addr_data(nei_id), dist_func_param);
                 if (top_candidates.size() < ef_ || dist < lower_bound) {
@@ -451,38 +461,48 @@ public:
         }
     }
 
-    inline const void* query_data(const void* seq, int sidx) const { return (char*)seq + sidx * data_size; }
+    struct Context {
+        std::priority_queue<Status, std::vector<Status>, std::less<Status>>& top_candidates;
+        std::priority_queue<Status, std::vector<Status>, std::greater<Status>>& candidate_set;
+        dist_t& lower_bound;
+        const void* query_seq;
+        int query_len;
+    };
+
+    inline void visit_status(Status st, Context& ctx) {
+        if (visited_status->is_visited(st)) {
+            return;
+        }
+        visited_status->visit(st);
+
+        metric_distance_computations++;
+
+        st.dist += fstdistfunc((char*)ctx.query_seq + st.q_sidx * data_size, addr_data(st.id), dist_func_param);
+        if (ctx.top_candidates.size() < ef || st.dist < ctx.lower_bound) {
+            // 如果走到下边界，加入候选集
+            if (st.q_sidx == ctx.query_len - 1) {
+                ctx.top_candidates.emplace(st);
+                if (ctx.top_candidates.size() > ef) {
+                    ctx.top_candidates.pop();
+                }
+                ctx.lower_bound = ctx.top_candidates.top().dist;
+            } else {
+                ctx.candidate_set.emplace(st);
+            }
+        }
+    }
 
     std::priority_queue<Status> search_level_dp(id_t ep_id, const void* query_seq, int query_len, int level) {
-        std::unordered_set<Status, typename Status::Hash> visited;
+        visited_status->reset();
         std::priority_queue<Status, std::vector<Status>, std::less<Status>> top_candidates;
         std::priority_queue<Status, std::vector<Status>, std::greater<Status>> candidate_set;
         dist_t lower_bound = fstdistfunc(query_seq, addr_data(ep_id), dist_func_param);
         Status init_st = {ep_id, 0, 0, lower_bound};
         top_candidates.emplace(init_st);
         candidate_set.emplace(init_st);
-        visited.insert(init_st);
+        visited_status->visit(init_st);
 
-        auto check_and_add = [&](Status st) {
-            if (visited.find(st) != visited.end()) {
-                return;
-            }
-            visited.insert(st);
-
-            st.dist += fstdistfunc(query_data(query_seq, st.q_sidx), addr_data(st.id), dist_func_param);
-            if (top_candidates.size() < ef || st.dist < lower_bound) {
-                // 如果走到下边界，加入候选集
-                if (st.q_sidx == query_len - 1) {
-                    top_candidates.emplace(st);
-                    if (top_candidates.size() > ef) {
-                        top_candidates.pop();
-                    }
-                    lower_bound = top_candidates.top().dist;
-                } else {
-                    candidate_set.emplace(st);
-                }
-            }
-        };
+        Context ctx{top_candidates, candidate_set, lower_bound, query_seq, query_len};
 
         while (!candidate_set.empty()) {
             Status st = candidate_set.top();
@@ -495,16 +515,18 @@ public:
             int size = get_ll_size(ll);
             id_t* neighbors = get_ll_neighbors(ll);
 
+            metric_hops++;
+
             // DTW 向下走一格
-            check_and_add({st.id, st.q_sidx + 1, st.b_sidx, st.dist});
+            visit_status({st.id, st.q_sidx + 1, st.b_sidx, st.dist}, ctx);
             for (int i = 0; i < size; i++) {
                 id_t nei_id = neighbors[i];
                 // 如果为后继节点，DTW 向右或右下走一格；否则重新作为起点
                 if (id_to_slabel[nei_id] == id_to_slabel[st.id] && id_to_sindex[nei_id] > st.b_sidx) {
-                    check_and_add({nei_id, st.q_sidx, id_to_sindex[nei_id], st.dist});
-                    check_and_add({nei_id, st.q_sidx + 1, id_to_sindex[nei_id], st.dist});
+                    visit_status({nei_id, st.q_sidx, id_to_sindex[nei_id], st.dist}, ctx);
+                    visit_status({nei_id, st.q_sidx + 1, id_to_sindex[nei_id], st.dist}, ctx);
                 } else {
-                    check_and_add({nei_id, 0, id_to_sindex[nei_id], 0});
+                    visit_status({nei_id, 0, id_to_sindex[nei_id], 0}, ctx);
                 }
             }
         }

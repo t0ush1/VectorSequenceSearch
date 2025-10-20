@@ -36,33 +36,6 @@ public:
         space = new hnswlib::L2Space(dim);
         sequence_hnsw = new SequenceHNSW<dist_t, slabel_t>(space, base_dataset->size, M, ef_construction);
 
-        // std::vector<std::pair<int, int>> ij_pair;
-        // for (int i = 0; i < base_num; i++) {
-        //     for (int j = 0; j < base_length[i]; j++) {
-        //         ij_pair.emplace_back(i, j);
-        //     }
-        // }
-
-        // std::vector<int> rand_indices(ij_pair.size());
-        // for (int i = 0; i < rand_indices.size(); i++) {
-        //     rand_indices[i] = i;
-        // }
-        // std::shuffle(rand_indices.begin(), rand_indices.end(), std::default_random_engine(42));
-
-        // for (int id : rand_indices) {
-        //     auto [i, j] = ij_pair[id];
-        //     sequence_hnsw->add_point(base_data[i] + j * dim, id, i, j);
-        // }
-
-        // label_t label = 0;
-        // for (int i = 0; i < base_num; i++) {
-        //     std::vector<label_t> seq;
-        //     for (int j = 0; j < base_length[i]; j++) {
-        //         seq.push_back(label++);
-        //     }
-        //     sequence_hnsw->add_successors(seq);
-        // }
-
         std::vector<std::vector<label_t>> sequences;
         label_t label = 0;
         for (int i = 0; i < base_num; i++) {
@@ -94,6 +67,21 @@ public:
             }
         }
         return result;
+    }
+
+    long get_metric(std::string metric_name) override {
+        if (metric_name == "hops") {
+            return sequence_hnsw->metric_hops;
+        } else if (metric_name == "dist_comps") {
+            return sequence_hnsw->metric_distance_computations;
+        } else {
+            return 0;
+        }
+    }
+
+    void reset_metric() override {
+        sequence_hnsw->metric_distance_computations = 0;
+        sequence_hnsw->metric_hops = 0;
     }
 };
 

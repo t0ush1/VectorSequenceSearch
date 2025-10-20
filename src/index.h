@@ -14,6 +14,8 @@ public:
 
     virtual void build(const VSSDataset* base_dataset) = 0;
     virtual std::priority_queue<std::pair<float, int>> search(const float* q_data, int q_len, int k, int ef) = 0;
+    virtual long get_metric(std::string metric_name) = 0;
+    virtual void reset_metric() = 0;
 };
 
 class RerankIndex : public VSSIndex {
