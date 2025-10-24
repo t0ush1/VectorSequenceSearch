@@ -11,6 +11,7 @@
 #include "dataset.h"
 #include "index.h"
 #include "sequence_graph.h"
+#include "set_graph.h"
 
 #include "baselines/my_hnsw_rerank.h"
 
@@ -30,7 +31,10 @@ public:
         long dist_comps;
     };
 
+    std::string log_time;
+
     int dim;
+    std::string sim_metric;
     std::string data_dir;
     std::string index_name;
 
@@ -41,32 +45,40 @@ public:
     VSSIndex* index;
     std::vector<int> efs;
 
-    VSSRunner(int dim, std::string data_dir, std::string index_name)
-        : dim(dim), data_dir(data_dir), index_name(index_name) {
+    VSSRunner(int dim, std::string sim_metric, std::string data_dir, std::string index_name)
+        : dim(dim), sim_metric(sim_metric), data_dir(data_dir), index_name(index_name) {
         fs::path data_path = fs::path("../datasets") / data_dir;
         base_dataset = new VSSDataset(dim, data_path / "base.fvecs", data_path / "base.lens");
         query_dataset = new VSSDataset(dim, data_path / "query.fvecs", data_path / "query.lens");
-        groundtruth = read_groundtruth(data_path / "groundtruth.ivecs");
+        groundtruth = read_groundtruth(data_path / "groundtruth-cpp.ivecs");
 
         if (index_name == "brute_force") {
-            index = new BruteForceIndex(dim);
+            index = new BruteForceIndex(dim, sim_metric);
             efs = {0};
         } else if (index_name == "hnsw") {
-            index = new HNSWIndex(dim, 16, 200);
+            index = new HNSWIndex(dim, sim_metric, 16, 200);
             efs = {10, 20, 50, 100, 200, 500, 1000};
         } else if (index_name == "ivfpq") {
-            index = new IVFPQIndex(dim, 100, 8, 8);
+            index = new IVFPQIndex(dim, sim_metric, 100, 8, 8);
             efs = {10, 20, 50, 100, 200, 500, 1000};
-        } else if (index_name == "dtw") {
-            index = new SequenceGraphIndex<float, int>(dim, 16, 200);
+        } else if (index_name == "set") {
+            index = new SetGraphIndex<float>(dim, sim_metric, 16, 200);
+            efs = {10, 20, 50, 100, 200, 500, 1000, 2000};
+        } else if (index_name == "sequence") {
+            index = new SequenceGraphIndex<float, int>(dim, sim_metric, 16, 200);
             efs = {10, 20, 50, 100, 200, 500, 1000, 2000};
         } else if (index_name == "my_hnsw") {
-            index = new MyHNSWIndex(dim, 16, 200);
+            index = new MyHNSWIndex(dim, sim_metric, 16, 200);
             efs = {10, 20, 50, 100, 200, 500, 1000};
         } else {
             std::cerr << "Unknown index: " << index_name << std::endl;
             std::exit(-1);
         }
+
+        std::time_t t = std::time(nullptr);
+        char buf[16];
+        std::strftime(buf, sizeof(buf), "%y%m%d-%H%M%S", std::localtime(&t));
+        log_time = buf;
     }
 
     ~VSSRunner() {
@@ -134,7 +146,7 @@ public:
     }
 
     void save_records(std::vector<QueryRecord>& records) {
-        std::string csv_name = index_name + "_search.csv";
+        std::string csv_name = index_name + "-search-" + log_time + ".csv";
         fs::path csv_path = fs::path("../log") / data_dir / csv_name;
         fs::create_directories(csv_path.parent_path());
 

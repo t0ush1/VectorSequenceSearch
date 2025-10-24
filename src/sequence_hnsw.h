@@ -15,7 +15,6 @@ public:
         id_t id;
         int q_sidx;
         int b_sidx;
-        // int b_sidx0, b_cnt; 是否要考虑起始点和点总数
         dist_t dist;
 
         // bool operator<(const Status& other) const { return dist < other.dist; }
@@ -64,17 +63,32 @@ public:
     class VisitedStatus {
     public:
         size_t num_elements;
-        int32_t* mass;
+        size_t query_len;
+        uint8_t tag;
+        uint8_t* mass;
 
-        VisitedStatus(size_t num_elements) : num_elements(num_elements), mass(new int32_t[num_elements]) {}
+        VisitedStatus(size_t num_elements) : num_elements(num_elements), query_len(0), tag(-1), mass(nullptr) {}
 
-        inline void reset() { memset(mass, 0, sizeof(int32_t) * num_elements); }
+        inline void reset(size_t q_len) {
+            if (q_len > query_len) {
+                mass = (uint8_t*)realloc(mass, sizeof(uint8_t) * num_elements * q_len);
+                memset(mass + query_len * num_elements, 0, sizeof(uint8_t) * num_elements * (q_len - query_len));
+                query_len = q_len;
+            }
+            tag++;
+            if (tag == 0) {
+                tag = 1;
+                memset(mass, 0, sizeof(uint8_t) * num_elements * query_len);
+            }
+        }
 
-        inline void visit(const Status& status) { mass[status.id] |= (1 << status.q_sidx); }
+        inline void visit(const Status& status) { mass[status.q_sidx * num_elements + status.id] = tag; }
 
-        inline bool is_visited(const Status& status) const { return mass[status.id] & (1 << status.q_sidx); }
+        inline bool is_visited(const Status& status) const {
+            return mass[status.q_sidx * num_elements + status.id] == tag;
+        }
 
-        ~VisitedStatus() { delete[] mass; }
+        ~VisitedStatus() { free(mass); }
     };
 
     size_t max_elements;
@@ -125,7 +139,7 @@ public:
         this->M = M;
         this->max_M = M;
         this->max_M0 = M * 2;
-        this->suc_M0 = 1;
+        this->suc_M0 = 0;
         this->ef_construction = std::max(ef_construction, M);
         this->ef = 10;
 
@@ -464,7 +478,7 @@ public:
     struct Context {
         std::priority_queue<Status, std::vector<Status>, std::less<Status>>& top_candidates;
         std::priority_queue<Status, std::vector<Status>, std::greater<Status>>& candidate_set;
-        dist_t& lower_bound;
+        Status& lower_bound;
         const void* query_seq;
         int query_len;
     };
@@ -478,14 +492,14 @@ public:
         metric_distance_computations++;
 
         st.dist += fstdistfunc((char*)ctx.query_seq + st.q_sidx * data_size, addr_data(st.id), dist_func_param);
-        if (ctx.top_candidates.size() < ef || st.dist < ctx.lower_bound) {
+        if (ctx.top_candidates.size() < ef || st < ctx.lower_bound) {
             // 如果走到下边界，加入候选集
             if (st.q_sidx == ctx.query_len - 1) {
                 ctx.top_candidates.emplace(st);
                 if (ctx.top_candidates.size() > ef) {
                     ctx.top_candidates.pop();
                 }
-                ctx.lower_bound = ctx.top_candidates.top().dist;
+                ctx.lower_bound = ctx.top_candidates.top();
             } else {
                 ctx.candidate_set.emplace(st);
             }
@@ -493,20 +507,19 @@ public:
     }
 
     std::priority_queue<Status> search_level_dp(id_t ep_id, const void* query_seq, int query_len, int level) {
-        visited_status->reset();
+        visited_status->reset(query_len);
         std::priority_queue<Status, std::vector<Status>, std::less<Status>> top_candidates;
         std::priority_queue<Status, std::vector<Status>, std::greater<Status>> candidate_set;
-        dist_t lower_bound = fstdistfunc(query_seq, addr_data(ep_id), dist_func_param);
-        Status init_st = {ep_id, 0, 0, lower_bound};
-        top_candidates.emplace(init_st);
-        candidate_set.emplace(init_st);
-        visited_status->visit(init_st);
+        Status lower_bound = {ep_id, 0, 0, fstdistfunc(query_seq, addr_data(ep_id), dist_func_param)};
+        top_candidates.emplace(lower_bound);
+        candidate_set.emplace(lower_bound);
+        visited_status->visit(lower_bound);
 
         Context ctx{top_candidates, candidate_set, lower_bound, query_seq, query_len};
 
         while (!candidate_set.empty()) {
             Status st = candidate_set.top();
-            if (st.dist > lower_bound && top_candidates.size() >= ef) {
+            if (st > lower_bound && top_candidates.size() >= ef) {
                 break;
             }
             candidate_set.pop();
@@ -522,12 +535,16 @@ public:
             for (int i = 0; i < size; i++) {
                 id_t nei_id = neighbors[i];
                 // 如果为后继节点，DTW 向右或右下走一格；否则重新作为起点
-                if (id_to_slabel[nei_id] == id_to_slabel[st.id] && id_to_sindex[nei_id] > st.b_sidx) {
-                    visit_status({nei_id, st.q_sidx, id_to_sindex[nei_id], st.dist}, ctx);
-                    visit_status({nei_id, st.q_sidx + 1, id_to_sindex[nei_id], st.dist}, ctx);
-                } else {
-                    visit_status({nei_id, 0, id_to_sindex[nei_id], 0}, ctx);
-                }
+                // if (id_to_slabel[nei_id] == id_to_slabel[st.id] && id_to_sindex[nei_id] > st.b_sidx) {
+                //     visit_status({nei_id, st.q_sidx, id_to_sindex[nei_id], st.dist}, ctx);
+                //     visit_status({nei_id, st.q_sidx + 1, id_to_sindex[nei_id], st.dist}, ctx);
+                // } else {
+                //     visit_status({nei_id, 0, id_to_sindex[nei_id], 0}, ctx);
+                // }
+
+                // TODO 启发式算法，什么时候重启
+                visit_status({nei_id, st.q_sidx, id_to_sindex[nei_id], st.dist}, ctx);
+                visit_status({nei_id, st.q_sidx + 1, id_to_sindex[nei_id], st.dist}, ctx);
             }
         }
 

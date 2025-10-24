@@ -16,41 +16,44 @@ public:
     int nprobe; // 搜索时访问的倒排表数量
 
     faiss::IndexIVFPQ* index;
-    faiss::IndexFlatL2* quantizer;
+    faiss::IndexFlat* quantizer;
 
-    IVFPQIndex(int dim, int nlist = 100, int m = 8, int nbits = 8)
-        : RerankIndex(dim), nlist(nlist), m(m), nbits(nbits) {}
+    IVFPQIndex(int dim, std::string sim_metric, int nlist = 100, int m = 8, int nbits = 8)
+        : RerankIndex(dim, sim_metric), nlist(nlist), m(m), nbits(nbits) {}
 
     ~IVFPQIndex() {
         delete index;
         delete quantizer;
     }
 
-    void build_index() override {
-        quantizer = new faiss::IndexFlatL2(dim);
-        index = new faiss::IndexIVFPQ(quantizer, dim, nlist, m, nbits);
-
-        index->train(base_vec_num, base_data[0]);
-        index->add(base_vec_num, base_data[0]);
-    }
-
-    void search_index(std::unordered_set<int>& candidates, const float* q_data, int q_len, int k, int ef) override {
-        index->nprobe = 10;
-
-        std::vector<float> D(k * q_len);
-        std::vector<faiss::idx_t> I(k * q_len);
-        index->search(q_len, q_data, k, D.data(), I.data());
-        for (auto idx : I) {
-            candidates.insert(label_to_base[idx]);
+    void build_vectors(const float* data, int size) override {
+        if (sim_metric == "maxsim") {
+            quantizer = new faiss::IndexFlatIP(dim);
+            index = new faiss::IndexIVFPQ(quantizer, dim, nlist, m, nbits, faiss::METRIC_INNER_PRODUCT);
+        } else if (sim_metric == "dtw") {
+            quantizer = new faiss::IndexFlatL2(dim);
+            index = new faiss::IndexIVFPQ(quantizer, dim, nlist, m, nbits, faiss::METRIC_L2);
         }
+
+        index->train(size, data);
+        index->add(size, data);
     }
 
-    long get_metric(std::string metric_name) override {
-        return 0;
+    std::unordered_set<int> search_candidates(const float* q_data, int q_len, int q_k) override {
+        index->nprobe = 10;
+        std::vector<float> D(q_len * q_k);
+        std::vector<faiss::idx_t> I(q_len * q_k);
+        index->search(q_len, q_data, q_k, D.data(), I.data());
+        std::unordered_set<int> candidates;
+        for (auto id : I) {
+            candidates.insert(label_to_base[id]);
+        }
+        return candidates;
     }
 
-    void reset_metric() override {
-    }
+    long get_metric(std::string metric_name) override { return 0; }
+
+    void reset_metric() override {}
 };
 
 } // namespace vss

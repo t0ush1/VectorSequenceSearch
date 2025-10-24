@@ -7,13 +7,24 @@
 
 namespace vss {
 
-inline float l2_sq_dist(const float* v1, const float* v2, int dim) {
-    float dist = 0;
-    for (int i = 0; i < dim; i++) {
-        float diff = v1[i] - v2[i];
-        dist += diff * diff;
+typedef float (*SimFunc)(const float*, int, const float*, int, int);
+
+inline float maxsim(const float* seq1, int len1, const float* seq2, int len2, int dim) {
+    hnswlib::InnerProductSpace space(dim);
+    hnswlib::DISTFUNC<float> dist_func = space.get_dist_func();
+    void* dist_func_param = space.get_dist_func_param();
+
+    float sum = 0.0f;
+    const float* v1 = seq1;
+    for (int i = 0; i < len1; i++, v1 += dim) {
+        float sim = std::numeric_limits<float>::infinity();
+        const float* v2 = seq2;
+        for (int j = 0; j < len2; j++, v2 += dim) {
+            sim = std::min(sim, dist_func(v1, v2, dist_func_param));
+        }
+        sum += sim;
     }
-    return dist;
+    return sum;
 }
 
 inline float dtw(const float* seq1, int len1, const float* seq2, int len2, int dim) {

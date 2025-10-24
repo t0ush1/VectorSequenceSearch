@@ -21,7 +21,8 @@ public:
     hnswlib::SpaceInterface<dist_t>* space;
     SequenceHNSW<dist_t, slabel_t>* sequence_hnsw;
 
-    SequenceGraphIndex(int dim, int M, int ef_construction) : VSSIndex(dim), M(M), ef_construction(ef_construction) {}
+    SequenceGraphIndex(int dim, std::string sim_metric, int M, int ef_construction)
+        : VSSIndex(dim, sim_metric), M(M), ef_construction(ef_construction) {}
 
     ~SequenceGraphIndex() {
         delete sequence_hnsw;
@@ -33,7 +34,12 @@ public:
         base_data = base_dataset->seq_datas;
         base_length = base_dataset->seq_lengths;
 
-        space = new hnswlib::L2Space(dim);
+        if (sim_metric == "maxsim") {
+            space = new hnswlib::InnerProductSpace(dim);
+        } else if (sim_metric == "dtw") {
+            space = new hnswlib::L2Space(dim);
+        }
+
         sequence_hnsw = new SequenceHNSW<dist_t, slabel_t>(space, base_dataset->size, M, ef_construction);
 
         std::vector<std::vector<label_t>> sequences;
