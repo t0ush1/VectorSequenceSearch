@@ -213,7 +213,7 @@ public:
 
     inline void set_ll_size(linklist_t* ll, int size) { *((int*)ll) = size; }
 
-    template<bool collect_metrics>
+    template<bool is_search>
     id_t search_down_to_level(id_t ep_id, const void* query, int level) {
         id_t cur_id = ep_id;
         dist_t cur_dist = fstdistfunc(query, addr_data(cur_id), dist_func_param);
@@ -226,7 +226,7 @@ public:
                 int size = get_ll_size(ll);
                 id_t* neighbors = get_ll_neighbors(ll);
 
-                if (collect_metrics) {
+                if (is_search) {
                     metric_hops++;
                     metric_distance_computations += size;
                 }
@@ -245,7 +245,7 @@ public:
         return cur_id;
     }
 
-    template<bool collect_metrics>
+    template<bool is_search>
     std::priority_queue<std::pair<dist_t, id_t>> search_level(id_t ep_id, const void* query, int level) {
         visited_list->reset();
         std::priority_queue<std::pair<dist_t, id_t>> top_candidates;
@@ -255,7 +255,7 @@ public:
         candidate_set.emplace(-lower_bound, ep_id);
         visited_list->visit(ep_id);
 
-        size_t ef_ = collect_metrics ? ef : ef_construction;
+        size_t ef_ = is_search ? ef : ef_construction;
         while (!candidate_set.empty()) {
             auto [cur_dist, cur_id] = candidate_set.top();
             if (-cur_dist > lower_bound && top_candidates.size() >= ef_) {
@@ -267,7 +267,7 @@ public:
             int size = get_ll_size(ll);
             id_t* neighbors = get_ll_neighbors(ll);
 
-            if (collect_metrics) {
+            if (is_search) {
                 metric_hops++;
             }
 
@@ -290,7 +290,7 @@ public:
                 }
                 visited_list->visit(nei_id);
 
-                if (collect_metrics) {
+                if (is_search) {
                     metric_distance_computations++;
                 }
 

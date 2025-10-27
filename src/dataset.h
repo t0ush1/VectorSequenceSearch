@@ -54,8 +54,8 @@ public:
 class VSSDataset : public Dataset {
 public:
     int seq_num;
-    std::vector<const float*> seq_datas;
-    std::vector<int> seq_lengths;
+    std::vector<const float*> seq_data;
+    std::vector<int> seq_len;
 
     VSSDataset(int dim, fs::path vector_path, fs::path length_path) : Dataset(dim, vector_path) {
         std::ifstream in(length_path, std::ios::binary);
@@ -66,19 +66,19 @@ public:
         in.seekg(0, std::ios::beg);
 
         seq_num = fsize / 4;
-        seq_datas.resize(seq_num);
-        seq_lengths.resize(seq_num);
+        seq_data.resize(seq_num);
+        seq_len.resize(seq_num);
 
-        in.read((char*)seq_lengths.data(), seq_num * 4);
+        in.read((char*)seq_len.data(), seq_num * 4);
         in.close();
 
-        seq_datas[0] = data;
+        seq_data[0] = data;
         for (int i = 1; i < seq_num; i++) {
-            seq_datas[i] = seq_datas[i - 1] + seq_lengths[i - 1] * dim;
+            seq_data[i] = seq_data[i - 1] + seq_len[i - 1] * dim;
         }
     }
 
-    std::pair<const float*, int> get_sequence(int seq_id) const { return {seq_datas[seq_id], seq_lengths[seq_id]}; }
+    std::pair<const float*, int> get_data_len(int seq_id) const { return {seq_data[seq_id], seq_len[seq_id]}; }
 };
 
 std::vector<std::unordered_set<int>> read_groundtruth(fs::path path) {

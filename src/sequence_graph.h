@@ -12,9 +12,9 @@ namespace vss {
 template<typename dist_t, typename slabel_t>
 class SequenceGraphIndex : public VSSIndex {
 public:
-    int base_num;
-    std::vector<const float*> base_data;
-    std::vector<int> base_length;
+    int seq_num;
+    std::vector<const float*> seq_data;
+    std::vector<int> seq_len;
 
     int M;
     int ef_construction;
@@ -30,9 +30,9 @@ public:
     }
 
     void build(const VSSDataset* base_dataset) override {
-        base_num = base_dataset->seq_num;
-        base_data = base_dataset->seq_datas;
-        base_length = base_dataset->seq_lengths;
+        seq_num = base_dataset->seq_num;
+        seq_data = base_dataset->seq_data;
+        seq_len = base_dataset->seq_len;
 
         if (sim_metric == "maxsim") {
             space = new hnswlib::InnerProductSpace(dim);
@@ -44,10 +44,10 @@ public:
 
         std::vector<std::vector<label_t>> sequences;
         label_t label = 0;
-        for (int i = 0; i < base_num; i++) {
+        for (int i = 0; i < seq_num; i++) {
             std::vector<label_t> seq;
-            const float* vec = base_data[i];
-            for (int j = 0; j < base_length[i]; j++) {
+            const float* vec = seq_data[i];
+            for (int j = 0; j < seq_len[i]; j++) {
                 sequence_hnsw->add_point(vec, label, i, j);
                 seq.push_back(label);
                 vec += dim;
@@ -66,7 +66,7 @@ public:
         std::priority_queue<std::pair<float, int>> result;
         auto candidates = sequence_hnsw->search_candidates(q_data, q_len);
         for (slabel_t id : candidates) {
-            float dist = dtw(q_data, q_len, base_data[id], base_length[id], dim);
+            float dist = dtw(q_data, q_len, seq_data[id], seq_len[id], dim);
             result.emplace(dist, id);
             if (result.size() > k) {
                 result.pop();
@@ -75,17 +75,14 @@ public:
         return result;
     }
 
-    long get_metric(std::string metric_name) override {
-        if (metric_name == "hops") {
-            return sequence_hnsw->metric_hops;
-        } else if (metric_name == "dist_comps") {
-            return sequence_hnsw->metric_distance_computations;
-        } else {
-            return 0;
-        }
+    std::vector<std::pair<std::string, long>> get_metrics() override {
+        return {
+            {"hops", sequence_hnsw->metric_hops},
+            {"dist_comps", sequence_hnsw->metric_distance_computations},
+        };
     }
 
-    void reset_metric() override {
+    void reset_metrics() override {
         sequence_hnsw->metric_distance_computations = 0;
         sequence_hnsw->metric_hops = 0;
     }

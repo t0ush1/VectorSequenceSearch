@@ -15,8 +15,8 @@ public:
     int nbits;  // 每个子量化器bit数
     int nprobe; // 搜索时访问的倒排表数量
 
-    faiss::IndexIVFPQ* index;
     faiss::IndexFlat* quantizer;
+    faiss::IndexIVFPQ* index;
 
     IVFPQIndex(int dim, std::string sim_metric, int nlist = 100, int m = 8, int nbits = 8)
         : RerankIndex(dim, sim_metric), nlist(nlist), m(m), nbits(nbits) {}
@@ -34,6 +34,8 @@ public:
             quantizer = new faiss::IndexFlatL2(dim);
             index = new faiss::IndexIVFPQ(quantizer, dim, nlist, m, nbits, faiss::METRIC_L2);
         }
+        // quantizer = new faiss::IndexFlatL2(dim);
+        // index = new faiss::IndexIVFPQ(quantizer, dim, nlist, m, nbits, faiss::METRIC_L2);
 
         index->train(size, data);
         index->add(size, data);
@@ -46,14 +48,10 @@ public:
         index->search(q_len, q_data, q_k, D.data(), I.data());
         std::unordered_set<int> candidates;
         for (auto id : I) {
-            candidates.insert(label_to_base[id]);
+            candidates.insert(vec_to_seq[id]);
         }
         return candidates;
     }
-
-    long get_metric(std::string metric_name) override { return 0; }
-
-    void reset_metric() override {}
 };
 
 } // namespace vss

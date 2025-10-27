@@ -46,24 +46,21 @@ public:
             while (!res.empty()) {
                 auto result = res.top();
                 res.pop();
-                candidates.insert(label_to_base[result.second]);
+                candidates.insert(vec_to_seq[result.second]);
             }
         }
 
         return candidates;
     }
 
-    long get_metric(std::string metric_name) override {
-        if (metric_name == "hops") {
-            return hnsw->metric_hops;
-        } else if (metric_name == "dist_comps") {
-            return hnsw->metric_distance_computations;
-        } else {
-            return 0;
-        }
+    std::vector<std::pair<std::string, long>> get_metrics() override {
+        return {
+            {"hops", hnsw->metric_hops},
+            {"dist_comps", hnsw->metric_distance_computations},
+        };
     }
 
-    void reset_metric() override {
+    void reset_metrics() override {
         hnsw->metric_distance_computations = 0;
         hnsw->metric_hops = 0;
     }

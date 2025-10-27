@@ -47,16 +47,12 @@ public:
             while (!res.empty()) {
                 auto result = res.top();
                 res.pop();
-                candidates.insert(label_to_base[result.second]);
+                candidates.insert(vec_to_seq[result.second]);
             }
         }
 
         return candidates;
     }
-
-    long get_metric(std::string metric_name) override { return 0; }
-
-    void reset_metric() override {}
 };
 
 } // namespace vss

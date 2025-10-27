@@ -11,7 +11,7 @@
 #include "dataset.h"
 #include "index.h"
 #include "sequence_graph.h"
-#include "set_graph.h"
+#include "sos_graph.h"
 
 #include "baselines/my_hnsw_rerank.h"
 
@@ -27,8 +27,7 @@ public:
         int hit;
         int total;
 
-        long hops;
-        long dist_comps;
+        std::vector<std::pair<std::string, long>> metrics;
     };
 
     std::string log_time;
@@ -57,13 +56,13 @@ public:
             efs = {0};
         } else if (index_name == "hnsw") {
             index = new HNSWIndex(dim, sim_metric, 16, 200);
-            efs = {10, 20, 50, 100, 200, 500, 1000};
+            efs = {10, 20, 50, 100, 200, 500};
         } else if (index_name == "ivfpq") {
             index = new IVFPQIndex(dim, sim_metric, 100, 8, 8);
-            efs = {10, 20, 50, 100, 200, 500, 1000};
-        } else if (index_name == "set") {
-            index = new SetGraphIndex<float>(dim, sim_metric, 16, 200);
-            efs = {10, 20, 50, 100, 200, 500, 1000, 2000};
+            efs = {10, 20, 50, 100, 200, 500};
+        } else if (index_name == "sos") {
+            index = new SOSGraphIndex<false>(dim, sim_metric, 16, 200);
+            efs = {10, 20, 50, 100, 200, 500};
         } else if (index_name == "sequence") {
             index = new SequenceGraphIndex<float, int>(dim, sim_metric, 16, 200);
             efs = {10, 20, 50, 100, 200, 500, 1000, 2000};
@@ -108,8 +107,10 @@ public:
             std::cout << "EF: " << r.ef << std::endl;
             std::cout << "Time: " << r.time << " us, Avg Time: " << r.time / r.q_num << " us" << std::endl;
             std::cout << "Recall: " << r.hit << "/" << r.total << "=" << r.hit * 1.0 / r.total << std::endl;
-            std::cout << "Hops: " << r.hops << ", Avg Hops: " << r.hops / r.q_num << std::endl;
-            std::cout << "Dist Comps: " << r.dist_comps << ", Avg Dist Comps: " << r.dist_comps / r.q_num << std::endl;
+            for (const auto& m : r.metrics) {
+                std::cout << "Metric (" << m.first << "): " << m.second << ", Avg Metric (" << m.first
+                          << "): " << m.second / r.q_num << std::endl;
+            }
             std::cout << std::endl;
         }
 
@@ -118,18 +119,21 @@ public:
 
     void run_search_once(int k, int ef, QueryRecord& record) {
         record.ef = ef;
-        index->reset_metric();
+        index->reset_metrics();
+        record.metrics = index->get_metrics();
 
         for (int i = 0; i < query_dataset->seq_num; i++) {
-            auto [q_data, q_len] = query_dataset->get_sequence(i);
+            auto [q_data, q_len] = query_dataset->get_data_len(i);
 
             auto begin = std::chrono::high_resolution_clock::now();
             auto result = index->search(q_data, q_len, k, ef);
             auto end = std::chrono::high_resolution_clock::now();
             record.time += std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
 
-            record.hops += index->get_metric("hops");
-            record.dist_comps += index->get_metric("dist_comps");
+            auto metrics = index->get_metrics();
+            for (int i = 0; i < metrics.size(); i++) {
+                record.metrics[i].second += metrics[i].second;
+            }
 
             assert(result.size() <= k);
             while (result.size() > 0) {
@@ -153,10 +157,19 @@ public:
         std::ofstream ofs(csv_path);
         cerr_if(!ofs.is_open(), "Failed to open " + csv_name);
 
-        ofs << "ef,time,hit,total,q_num,hops,distance_computations" << std::endl;
+        assert(!records.empty());
+        ofs << "ef,time,hit,total,q_num";
+        for (const auto& m : records[0].metrics) {
+            ofs << "," << m.first;
+        }
+        ofs << std::endl;
+
         for (const auto& r : records) {
-            ofs << r.ef << "," << r.time << "," << r.hit << "," << r.total << "," << r.q_num << "," << r.hops << ","
-                << r.dist_comps << std::endl;
+            ofs << r.ef << "," << r.time << "," << r.hit << "," << r.total << "," << r.q_num;
+            for (const auto& m : r.metrics) {
+                ofs << "," << m.second;
+            }
+            ofs << std::endl;
         }
 
         ofs.close();
