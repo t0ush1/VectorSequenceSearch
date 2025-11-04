@@ -1,6 +1,5 @@
 #pragma once
 
-#include "dataset.h"
 #include "index.h"
 #include "my_hnsw.h"
 
@@ -13,7 +12,7 @@ public:
     hnswlib::SpaceInterface<float>* space;
     MyHNSW<float>* hnsw;
 
-    MyHNSWIndex(int dim, std::string sim_metric, int M, int ef_construction)
+    MyHNSWIndex(int dim, SimMetric sim_metric, int M, int ef_construction)
         : RerankIndex(dim, sim_metric), M(M), ef_construction(ef_construction) {}
 
     ~MyHNSWIndex() {
@@ -22,9 +21,9 @@ public:
     }
 
     void build_vectors(const float* data, int size) override {
-        if (sim_metric == "maxsim") {
+        if (sim_metric == MAXSIM) {
             space = new hnswlib::InnerProductSpace(dim);
-        } else if (sim_metric == "l2") {
+        } else {
             space = new hnswlib::L2Space(dim);
         }
 
@@ -57,12 +56,16 @@ public:
         return {
             {"hops", hnsw->metric_hops},
             {"dist_comps", hnsw->metric_distance_computations},
+            {"cand_gen_time", metric_cand_gen_time},
+            {"rerank_time", metric_rerank_time},
         };
     }
 
     void reset_metrics() override {
         hnsw->metric_distance_computations = 0;
         hnsw->metric_hops = 0;
+        metric_cand_gen_time = 0;
+        metric_rerank_time = 0;
     }
 };
 

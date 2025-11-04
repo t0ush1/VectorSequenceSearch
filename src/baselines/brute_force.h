@@ -1,13 +1,12 @@
 #pragma once
-#include "dataset.h"
+
 #include "index.h"
-#include "util.h"
 
 namespace vss {
 
 class BruteForceIndex : public RerankIndex {
 public:
-    BruteForceIndex(int dim, std::string sim_metric) : RerankIndex(dim, sim_metric) {}
+    BruteForceIndex(int dim, SimMetric sim_metric) : RerankIndex(dim, sim_metric) {}
 
     void build_vectors(const float* data, int size) override {}
 

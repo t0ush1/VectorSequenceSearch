@@ -2,7 +2,6 @@
 
 #include <hnswlib/hnswlib.h>
 
-#include "dataset.h"
 #include "index.h"
 
 namespace vss {
@@ -14,7 +13,7 @@ public:
     hnswlib::SpaceInterface<float>* space;
     hnswlib::HierarchicalNSW<float>* hnsw;
 
-    HNSWIndex(int dim, std::string sim_metric, int M, int ef_construction)
+    HNSWIndex(int dim, SimMetric sim_metric, int M, int ef_construction)
         : RerankIndex(dim, sim_metric), M(M), ef_construction(ef_construction) {}
 
     ~HNSWIndex() {
@@ -23,9 +22,9 @@ public:
     }
 
     void build_vectors(const float* data, int size) override {
-        if (sim_metric == "maxsim") {
+        if (sim_metric == MAXSIM) {
             space = new hnswlib::InnerProductSpace(dim);
-        } else if (sim_metric == "l2") {
+        } else {
             space = new hnswlib::L2Space(dim);
         }
 

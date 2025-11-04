@@ -2,24 +2,23 @@
 #include <queue>
 
 #include "dataset.h"
-#include "util.h"
+#include "metric.h"
 
 namespace vss {
 
 class VSSIndex {
 public:
     int dim;
-    std::string sim_metric;
-    SimFunc sim_func;
+    SimMetric sim_metric;
+    float (*sim_func)(const float*, int, const float*, int, int);
 
-    VSSIndex(int dim, std::string sim_metric) : dim(dim), sim_metric(sim_metric) {
-        if (sim_metric == "maxsim") {
-            sim_func = vss::maxsim;
-        } else if (sim_metric == "dtw") {
-            sim_func = vss::dtw;
-        } else {
-            std::cerr << "Unknown similarity metric: " << sim_metric << std::endl;
-            std::exit(-1);
+    VSSIndex(int dim, SimMetric sim_metric) : dim(dim), sim_metric(sim_metric) {
+        if (sim_metric == MAXSIM) {
+            sim_func = maxsim;
+        } else if (sim_metric == DTW) {
+            sim_func = dtw;
+        } else if (sim_metric == SDTW) {
+            sim_func = sdtw;
         }
     }
 
@@ -37,10 +36,13 @@ public:
 
     std::vector<int> vec_to_seq;
 
+    long metric_cand_gen_time;
+    long metric_rerank_time;
+
     virtual void build_vectors(const float* data, int size) = 0;
     virtual std::unordered_set<int> search_candidates(const float* q_data, int q_len, int q_k) = 0;
 
-    RerankIndex(int dim, std::string sim_metric) : VSSIndex(dim, sim_metric) {}
+    RerankIndex(int dim, SimMetric sim_metric) : VSSIndex(dim, sim_metric) {}
 
     void build(const VSSDataset* base_dataset) override {
         seq_num = base_dataset->seq_num;
@@ -59,8 +61,11 @@ public:
     }
 
     std::priority_queue<std::pair<float, int>> search(const float* q_data, int q_len, int k, int ef) override {
-        std::priority_queue<std::pair<float, int>> result;
+        auto begin = std::chrono::high_resolution_clock::now();
         auto candidates = search_candidates(q_data, q_len, ef);
+        auto mid = std::chrono::high_resolution_clock::now();
+
+        std::priority_queue<std::pair<float, int>> result;
         for (int id : candidates) {
             float dist = sim_func(q_data, q_len, seq_data[id], seq_len[id], dim);
             result.emplace(dist, id);
@@ -68,7 +73,24 @@ public:
                 result.pop();
             }
         }
+
+        auto end = std::chrono::high_resolution_clock::now();
+        metric_cand_gen_time += std::chrono::duration_cast<std::chrono::microseconds>(mid - begin).count();
+        metric_rerank_time += std::chrono::duration_cast<std::chrono::microseconds>(end - mid).count();
+
         return result;
+    }
+
+    std::vector<std::pair<std::string, long>> get_metrics() override {
+        return {
+            {"cand_gen_time", metric_cand_gen_time},
+            {"rerank_time", metric_rerank_time},
+        };
+    }
+
+    void reset_metrics() override {
+        metric_cand_gen_time = 0;
+        metric_rerank_time = 0;
     }
 };
 

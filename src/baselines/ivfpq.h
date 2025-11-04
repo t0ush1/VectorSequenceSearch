@@ -3,7 +3,6 @@
 #include <faiss/IndexFlat.h>
 #include <faiss/IndexIVFPQ.h>
 
-#include "dataset.h"
 #include "index.h"
 
 namespace vss {
@@ -18,7 +17,7 @@ public:
     faiss::IndexFlat* quantizer;
     faiss::IndexIVFPQ* index;
 
-    IVFPQIndex(int dim, std::string sim_metric, int nlist = 100, int m = 8, int nbits = 8)
+    IVFPQIndex(int dim, SimMetric sim_metric, int nlist = 100, int m = 8, int nbits = 8)
         : RerankIndex(dim, sim_metric), nlist(nlist), m(m), nbits(nbits) {}
 
     ~IVFPQIndex() {
@@ -27,10 +26,10 @@ public:
     }
 
     void build_vectors(const float* data, int size) override {
-        if (sim_metric == "maxsim") {
+        if (sim_metric == MAXSIM) {
             quantizer = new faiss::IndexFlatIP(dim);
             index = new faiss::IndexIVFPQ(quantizer, dim, nlist, m, nbits, faiss::METRIC_INNER_PRODUCT);
-        } else if (sim_metric == "dtw") {
+        } else {
             quantizer = new faiss::IndexFlatL2(dim);
             index = new faiss::IndexIVFPQ(quantizer, dim, nlist, m, nbits, faiss::METRIC_L2);
         }
