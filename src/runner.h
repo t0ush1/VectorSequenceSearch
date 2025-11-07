@@ -5,15 +5,15 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "baselines/brute_force.h"
-#include "baselines/hnsw.h"
-#include "baselines/ivfpq.h"
 #include "dataset.h"
 #include "index.h"
-#include "seq_graph.h"
-#include "set_graph.h"
+#include "space.h"
 
-#include "baselines/my_hnsw_rerank.h"
+#include "baselines/brute_force.h"
+#include "baselines/hnsw_pointwise.h"
+#include "baselines/ivfpq_pointwise.h"
+#include "baselines/multi_hnsw_index.h"
+#include "baselines/single_hnsw_index.h"
 
 namespace vss {
 class VSSRunner {
@@ -33,57 +33,52 @@ public:
     std::string log_time;
 
     int dim;
-    std::string sim_metric_name;
+    std::string metric_name;
     std::string data_dir;
     std::string index_name;
-
-    SimMetric sim_metric;
 
     VSSDataset* base_dataset;
     VSSDataset* query_dataset;
     std::vector<std::unordered_set<int>> groundtruth;
 
+    VSSSpace* space;
     VSSIndex* index;
     std::vector<int> efs;
 
-    VSSRunner(int dim, std::string sim_metric_name, std::string data_dir, std::string index_name)
-        : dim(dim), sim_metric_name(sim_metric_name), data_dir(data_dir), index_name(index_name) {
+    VSSRunner(int dim, std::string metric_name, std::string data_dir, std::string index_name)
+        : dim(dim), metric_name(metric_name), data_dir(data_dir), index_name(index_name) {
         fs::path data_path = fs::path("../datasets") / data_dir;
         base_dataset = new VSSDataset(dim, data_path / "base.fvecs", data_path / "base.lens");
         query_dataset = new VSSDataset(dim, data_path / "query.fvecs", data_path / "query.lens");
-        groundtruth = read_groundtruth(data_path / ("groundtruth-" + sim_metric_name + ".ivecs"));
+        groundtruth = read_groundtruth(data_path / ("groundtruth-" + metric_name + ".ivecs"));
+        // groundtruth = read_groundtruth(data_path / "groundtruth.ivecs");
 
-        SimMetric sim_metric;
-        if (sim_metric_name == "maxsim") {
-            sim_metric = MAXSIM;
-        } else if (sim_metric_name == "dtw") {
-            sim_metric = DTW;
-        } else if (sim_metric_name == "sdtw") {
-            sim_metric = SDTW;
+        if (metric_name == "maxsim") {
+            space = new MaxSimSpace(dim);
+        } else if (metric_name == "dtw") {
+            space = new DTWSpace(dim);
+        } else if (metric_name == "sdtw") {
+            space = new SDTWSpace(dim);
         } else {
-            std::cerr << "Unknown similarity metric: " << sim_metric_name << std::endl;
+            std::cerr << "Unknown similarity metric: " << metric_name << std::endl;
             std::exit(-1);
         }
 
         if (index_name == "brute_force") {
-            index = new BruteForceIndex(dim, sim_metric);
+            index = new BruteForceIndex(dim, space);
             efs = {0};
         } else if (index_name == "hnsw") {
-            index = new HNSWIndex(dim, sim_metric, 16, 200);
-            efs = {10, 20, 40, 60, 80, 100, 200, 500};
-            // efs = {500, 1000, 1500, 2000, 3000, 4000, 5000};
+            index = new HNSWPointwiseIndex(dim, space, 16, 200);
+            efs = {10, 20, 40, 60, 80, 100, 200, 500, 1000, 1500, 2000, 3000, 4000, 5000};
         } else if (index_name == "ivfpq") {
-            index = new IVFPQIndex(dim, sim_metric, 100, 8, 8);
+            index = new IVFPQPointwiseIndex(dim, space, 100, 8, 8);
             efs = {10, 20, 50, 100, 200, 500};
-        } else if (index_name == "set") {
-            index = new SetGraphIndex<false, true>(dim, sim_metric, 16, 200);
-            efs = {10, 20, 30, 40, 50, 60, 80, 100, 200, 500};
-        } else if (index_name == "seq") {
-            index = new SeqGraphIndex<true, true>(dim, sim_metric, 16, 200);
-            efs = {10, 20, 30, 40, 50, 60, 80, 100, 200, 500, 1000, 1500, 2000};
-        } else if (index_name == "my_hnsw") {
-            index = new MyHNSWIndex(dim, sim_metric, 16, 200);
-            efs = {10, 20, 50, 100, 200, 500, 1000};
+        } else if (index_name == "single_hnsw") {
+            index = new SingleHNSWIndex(dim, space, 16, 200);
+            efs = {10, 20, 40, 60, 80, 100, 200, 500, 1000, 1500, 2000, 3000, 4000, 5000};
+        } else if (index_name == "seg") {
+            index = new MultiHNSWIndex(dim, space, 16, 200);
+            efs = {10, 20, 30, 40, 50, 60, 80, 100, 200};
         } else {
             std::cerr << "Unknown index: " << index_name << std::endl;
             std::exit(-1);
@@ -115,14 +110,9 @@ public:
         int k = groundtruth[0].size();
 
         for (int i = 0; i < efs.size(); i++) {
-            QueryRecord record = run_search_once(k, efs[i]);
-            records.push_back(record);
-            if (record.hit >= 0.999 * record.total) {
-                break;
-            }
-        }
+            QueryRecord r = run_search_once(k, efs[i]);
+            records.push_back(r);
 
-        for (const auto& r : records) {
             std::cout << "EF: " << r.ef << std::endl;
             std::cout << "Time: " << r.time << " us, " << r.time / r.q_num << " us" << std::endl;
             std::cout << "Recall: " << r.hit << "/" << r.total << "=" << r.hit * 1.0 / r.total << std::endl;
@@ -130,6 +120,10 @@ public:
                 std::cout << "Metric (" << name << "): " << value << ", " << value / r.q_num << std::endl;
             }
             std::cout << std::endl;
+
+            if (r.hit >= 0.999 * r.total) {
+                break;
+            }
         }
 
         save_records(records);
@@ -174,7 +168,7 @@ public:
 
     void save_records(std::vector<QueryRecord>& records) {
         std::string csv_name = index_name + "-search-" + log_time + ".csv";
-        fs::path csv_path = fs::path("../log") / data_dir / sim_metric_name / csv_name;
+        fs::path csv_path = fs::path("../log") / data_dir / metric_name / csv_name;
         fs::create_directories(csv_path.parent_path());
 
         std::ofstream ofs(csv_path);

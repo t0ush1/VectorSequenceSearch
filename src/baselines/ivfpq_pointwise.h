@@ -7,7 +7,7 @@
 
 namespace vss {
 
-class IVFPQIndex : public RerankIndex {
+class IVFPQPointwiseIndex : public RerankIndex {
 public:
     int nlist;  // 倒排表数量
     int m;      // PQ分块数
@@ -17,24 +17,22 @@ public:
     faiss::IndexFlat* quantizer;
     faiss::IndexIVFPQ* index;
 
-    IVFPQIndex(int dim, SimMetric sim_metric, int nlist = 100, int m = 8, int nbits = 8)
-        : RerankIndex(dim, sim_metric), nlist(nlist), m(m), nbits(nbits) {}
+    IVFPQPointwiseIndex(int dim, VSSSpace* space, int nlist = 100, int m = 8, int nbits = 8)
+        : RerankIndex(dim, space), nlist(nlist), m(m), nbits(nbits) {}
 
-    ~IVFPQIndex() {
+    ~IVFPQPointwiseIndex() {
         delete index;
         delete quantizer;
     }
 
     void build_vectors(const float* data, int size) override {
-        if (sim_metric == MAXSIM) {
+        if (space->metric == MAXSIM) {
             quantizer = new faiss::IndexFlatIP(dim);
             index = new faiss::IndexIVFPQ(quantizer, dim, nlist, m, nbits, faiss::METRIC_INNER_PRODUCT);
         } else {
             quantizer = new faiss::IndexFlatL2(dim);
             index = new faiss::IndexIVFPQ(quantizer, dim, nlist, m, nbits, faiss::METRIC_L2);
         }
-        // quantizer = new faiss::IndexFlatL2(dim);
-        // index = new faiss::IndexIVFPQ(quantizer, dim, nlist, m, nbits, faiss::METRIC_L2);
 
         index->train(size, data);
         index->add(size, data);

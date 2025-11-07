@@ -6,29 +6,19 @@
 
 namespace vss {
 
-class HNSWIndex : public RerankIndex {
+class HNSWPointwiseIndex : public RerankIndex {
 public:
     int M;
     int ef_construction;
-    hnswlib::SpaceInterface<float>* space;
     hnswlib::HierarchicalNSW<float>* hnsw;
 
-    HNSWIndex(int dim, SimMetric sim_metric, int M, int ef_construction)
-        : RerankIndex(dim, sim_metric), M(M), ef_construction(ef_construction) {}
+    HNSWPointwiseIndex(int dim, VSSSpace* space, int M, int ef_construction)
+        : RerankIndex(dim, space), M(M), ef_construction(ef_construction) {}
 
-    ~HNSWIndex() {
-        delete hnsw;
-        delete space;
-    }
+    ~HNSWPointwiseIndex() { delete hnsw; }
 
     void build_vectors(const float* data, int size) override {
-        if (sim_metric == MAXSIM) {
-            space = new hnswlib::InnerProductSpace(dim);
-        } else {
-            space = new hnswlib::L2Space(dim);
-        }
-
-        hnsw = new hnswlib::HierarchicalNSW<float>(space, size, M, ef_construction);
+        hnsw = new hnswlib::HierarchicalNSW<float>(space->space, size, M, ef_construction);
 
         const float* vec = data;
         for (size_t i = 0; i < size; i++, vec += dim) {

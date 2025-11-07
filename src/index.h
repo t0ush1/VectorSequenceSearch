@@ -2,25 +2,16 @@
 #include <queue>
 
 #include "dataset.h"
-#include "metric.h"
+#include "space.h"
 
 namespace vss {
 
 class VSSIndex {
 public:
     int dim;
-    SimMetric sim_metric;
-    float (*sim_func)(const float*, int, const float*, int, int);
+    VSSSpace* space;
 
-    VSSIndex(int dim, SimMetric sim_metric) : dim(dim), sim_metric(sim_metric) {
-        if (sim_metric == MAXSIM) {
-            sim_func = maxsim;
-        } else if (sim_metric == DTW) {
-            sim_func = dtw;
-        } else if (sim_metric == SDTW) {
-            sim_func = sdtw;
-        }
-    }
+    VSSIndex(int dim, VSSSpace* space) : dim(dim), space(space) {}
 
     virtual void build(const VSSDataset* base_dataset) = 0;
     virtual std::priority_queue<std::pair<float, int>> search(const float* q_data, int q_len, int k, int ef) = 0;
@@ -36,13 +27,14 @@ public:
 
     std::vector<int> vec_to_seq;
 
+    long metric_cand_num;
     long metric_cand_gen_time;
     long metric_rerank_time;
 
     virtual void build_vectors(const float* data, int size) = 0;
     virtual std::unordered_set<int> search_candidates(const float* q_data, int q_len, int q_k) = 0;
 
-    RerankIndex(int dim, SimMetric sim_metric) : VSSIndex(dim, sim_metric) {}
+    RerankIndex(int dim, VSSSpace* space) : VSSIndex(dim, space) {}
 
     void build(const VSSDataset* base_dataset) override {
         seq_num = base_dataset->seq_num;
@@ -67,7 +59,7 @@ public:
 
         std::priority_queue<std::pair<float, int>> result;
         for (int id : candidates) {
-            float dist = sim_func(q_data, q_len, seq_data[id], seq_len[id], dim);
+            float dist = space->distance(q_data, q_len, seq_data[id], seq_len[id]);
             result.emplace(dist, id);
             if (result.size() > k) {
                 result.pop();
@@ -75,6 +67,7 @@ public:
         }
 
         auto end = std::chrono::high_resolution_clock::now();
+        metric_cand_num += candidates.size();
         metric_cand_gen_time += std::chrono::duration_cast<std::chrono::microseconds>(mid - begin).count();
         metric_rerank_time += std::chrono::duration_cast<std::chrono::microseconds>(end - mid).count();
 
@@ -83,12 +76,14 @@ public:
 
     std::vector<std::pair<std::string, long>> get_metrics() override {
         return {
+            {"cand_num", metric_cand_num},
             {"cand_gen_time", metric_cand_gen_time},
             {"rerank_time", metric_rerank_time},
         };
     }
 
     void reset_metrics() override {
+        metric_cand_num = 0;
         metric_cand_gen_time = 0;
         metric_rerank_time = 0;
     }

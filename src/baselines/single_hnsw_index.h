@@ -1,33 +1,23 @@
 #pragma once
 
 #include "index.h"
-#include "my_hnsw.h"
+#include "single_hnsw.h"
 
 namespace vss {
 
-class MyHNSWIndex : public RerankIndex {
+class SingleHNSWIndex : public RerankIndex {
 public:
     int M;
     int ef_construction;
-    hnswlib::SpaceInterface<float>* space;
-    MyHNSW<float>* hnsw;
+    SingleHNSW<float>* hnsw;
 
-    MyHNSWIndex(int dim, SimMetric sim_metric, int M, int ef_construction)
-        : RerankIndex(dim, sim_metric), M(M), ef_construction(ef_construction) {}
+    SingleHNSWIndex(int dim, VSSSpace* space, int M, int ef_construction)
+        : RerankIndex(dim, space), M(M), ef_construction(ef_construction) {}
 
-    ~MyHNSWIndex() {
-        delete hnsw;
-        delete space;
-    }
+    ~SingleHNSWIndex() { delete hnsw; }
 
     void build_vectors(const float* data, int size) override {
-        if (sim_metric == MAXSIM) {
-            space = new hnswlib::InnerProductSpace(dim);
-        } else {
-            space = new hnswlib::L2Space(dim);
-        }
-
-        hnsw = new MyHNSW<float>(space, size, M, ef_construction);
+        hnsw = new SingleHNSW<float>(space->space, size, M, ef_construction);
 
         const float* vec = data;
         for (size_t i = 0; i < size; i++, vec += dim) {
@@ -53,19 +43,16 @@ public:
     }
 
     std::vector<std::pair<std::string, long>> get_metrics() override {
-        return {
-            {"hops", hnsw->metric_hops},
-            {"dist_comps", hnsw->metric_distance_computations},
-            {"cand_gen_time", metric_cand_gen_time},
-            {"rerank_time", metric_rerank_time},
-        };
+        auto metrics = RerankIndex::get_metrics();
+        metrics.push_back({"hops", hnsw->metric_hops});
+        metrics.push_back({"dist_comps", hnsw->metric_distance_computations});
+        return metrics;
     }
 
     void reset_metrics() override {
+        RerankIndex::reset_metrics();
         hnsw->metric_distance_computations = 0;
         hnsw->metric_hops = 0;
-        metric_cand_gen_time = 0;
-        metric_rerank_time = 0;
     }
 };
 

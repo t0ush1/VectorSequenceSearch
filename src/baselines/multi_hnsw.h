@@ -1,19 +1,13 @@
 #pragma once
 
-#include <hnswlib/hnswlib.h>
+#include "space.h"
 
 namespace vss {
 
-template<bool enable_buffer, bool unlink_same_seq>
-class SeqGraphIndex;
-
-typedef unsigned int sid_t; // set/sequence id
-typedef unsigned int lid_t; // local id
-typedef unsigned int vid_t; // vector id
+typedef unsigned int id_t;
 typedef unsigned int linklist_t;
 
-template<typename dist_t, bool enable_buffer, bool unlink_same_seq>
-class SeqHNSW {
+class MultiHNSW {
 public:
     class VisitedList {
     public:
@@ -33,12 +27,14 @@ public:
             }
         }
 
-        inline void visit(vid_t id) { mass[id] = tag; }
+        inline void visit(id_t id) { mass[id] = tag; }
 
-        inline bool is_visited(vid_t id) const { return mass[id] == tag; }
+        inline bool is_visited(id_t id) const { return mass[id] == tag; }
 
         ~VisitedList() { delete[] mass; }
     };
+
+    VSSSpace* space;
 
     size_t max_elements;
     size_t cur_elements;
@@ -49,20 +45,16 @@ public:
     size_t ef_construction;
     size_t ef;
 
-    size_t data_size;
-    hnswlib::DISTFUNC<dist_t> fstdistfunc;
-    void* dist_func_param;
-
     int max_level;
-    vid_t enterpoint;
+    id_t enterpoint;
     VisitedList* visited_list;
 
     size_t size_links_level;
     size_t size_links_level0;
-    size_t size_element;
 
-    char* elements;
-    char** linklists;
+    std::vector<char*> elements;
+    std::vector<char*> linklists;
+    std::vector<int> element_lens;
     std::vector<int> element_levels;
 
     std::default_random_engine level_generator;
@@ -71,10 +63,10 @@ public:
     long metric_distance_computations;
     long metric_hops;
 
-    SeqGraphIndex<enable_buffer, unlink_same_seq>* outer_index;
+    MultiHNSW(VSSSpace* space, size_t max_elements, size_t M = 16, size_t ef_construction = 200,
+              size_t random_seed = 100) {
+        this->space = space;
 
-    SeqHNSW(hnswlib::SpaceInterface<dist_t>* space, size_t max_elements, size_t M = 16, size_t ef_construction = 200,
-            size_t random_seed = 100) {
         this->max_elements = max_elements;
         this->cur_elements = 0;
 
@@ -84,20 +76,16 @@ public:
         this->ef_construction = std::max(ef_construction, M);
         this->ef = 10;
 
-        this->data_size = space->get_data_size();
-        this->fstdistfunc = space->get_dist_func();
-        this->dist_func_param = space->get_dist_func_param();
-
         this->max_level = -1;
         this->enterpoint = -1;
         this->visited_list = new VisitedList(max_elements);
 
-        this->size_links_level = sizeof(linklist_t) + max_M * sizeof(vid_t);
-        this->size_links_level0 = sizeof(linklist_t) + max_M0 * sizeof(vid_t);
-        this->size_element = size_links_level0 + data_size;
+        this->size_links_level = sizeof(linklist_t) + max_M * sizeof(id_t);
+        this->size_links_level0 = sizeof(linklist_t) + max_M0 * sizeof(id_t);
 
-        this->elements = (char*)malloc(max_elements * size_element);
-        this->linklists = (char**)malloc(max_elements * sizeof(void*));
+        this->elements.resize(max_elements);
+        this->linklists.resize(max_elements);
+        this->element_lens.resize(max_elements);
         this->element_levels.resize(max_elements);
 
         this->level_generator.seed(random_seed);
@@ -107,15 +95,14 @@ public:
         this->metric_hops = 0;
     }
 
-    ~SeqHNSW() {
+    ~MultiHNSW() {
         free(visited_list);
-        free(elements);
-        for (vid_t i = 0; i < cur_elements; i++) {
+        for (id_t i = 0; i < cur_elements; i++) {
+            free(elements[i]);
             if (element_levels[i] > 0) {
                 free(linklists[i]);
             }
         }
-        free(linklists);
     }
 
     inline int get_random_level() {
@@ -124,30 +111,28 @@ public:
         return (int)r;
     }
 
-    inline char* addr_element(vid_t id) const { return elements + id * size_element; }
+    inline linklist_t* addr_link_level0(id_t id) const { return (linklist_t*)elements[id]; }
 
-    inline linklist_t* addr_link_level0(vid_t id) const { return (linklist_t*)addr_element(id); }
+    inline float* addr_data(id_t id) const { return (float*)(elements[id] + size_links_level0); }
 
-    inline char* addr_data(vid_t id) const { return addr_element(id) + size_links_level0; }
-
-    inline linklist_t* addr_link_level(vid_t id, int level) const {
+    inline linklist_t* addr_link_level(id_t id, int level) const {
         return (linklist_t*)(linklists[id] + (level - 1) * size_links_level);
     }
 
-    inline linklist_t* addr_linklist(vid_t id, int level) const {
+    inline linklist_t* addr_linklist(id_t id, int level) const {
         return level == 0 ? addr_link_level0(id) : addr_link_level(id, level);
     }
 
     inline int get_ll_size(linklist_t* ll) const { return *((int*)ll); }
 
-    inline vid_t* get_ll_neighbors(linklist_t* ll) const { return (vid_t*)(ll + 1); }
+    inline id_t* get_ll_neighbors(linklist_t* ll) const { return (id_t*)(ll + 1); }
 
     inline void set_ll_size(linklist_t* ll, int size) { *((int*)ll) = size; }
 
     template<bool is_search>
-    vid_t search_down_to_level(vid_t ep_id, const void* query, int level) {
-        vid_t cur_id = ep_id;
-        dist_t cur_dist = fstdistfunc(query, addr_data(cur_id), dist_func_param);
+    id_t search_down_to_level(id_t ep_id, const float* q_data, int q_len, int level) {
+        id_t cur_id = ep_id;
+        float cur_dist = space->distance(q_data, q_len, addr_data(cur_id), element_lens[cur_id]);
         for (int lev = max_level; lev > level; lev--) {
             bool changed = true;
             while (changed) {
@@ -155,16 +140,20 @@ public:
 
                 linklist_t* ll = addr_linklist(cur_id, lev);
                 int size = get_ll_size(ll);
-                vid_t* neighbors = get_ll_neighbors(ll);
+                id_t* neighbors = get_ll_neighbors(ll);
 
                 if (is_search) {
                     metric_hops++;
-                    metric_distance_computations += size;
                 }
 
                 for (int i = 0; i < size; i++) {
-                    vid_t nei_id = neighbors[i];
-                    dist_t d = fstdistfunc(query, addr_data(nei_id), dist_func_param);
+                    id_t nei_id = neighbors[i];
+                    float d = space->distance(q_data, q_len, addr_data(nei_id), element_lens[nei_id]);
+
+                    if (is_search) {
+                        metric_distance_computations += q_len * element_lens[nei_id];
+                    }
+
                     if (d < cur_dist) {
                         cur_dist = d;
                         cur_id = nei_id;
@@ -177,11 +166,11 @@ public:
     }
 
     template<bool is_search>
-    std::priority_queue<std::pair<dist_t, vid_t>> search_level(vid_t ep_id, const void* query, int level) {
+    std::priority_queue<std::pair<float, id_t>> search_level(id_t ep_id, const float* q_data, int q_len, int level) {
         visited_list->reset();
-        std::priority_queue<std::pair<dist_t, vid_t>> top_candidates;
-        std::priority_queue<std::pair<dist_t, vid_t>> candidate_set;
-        dist_t lower_bound = fstdistfunc(query, addr_data(ep_id), dist_func_param);
+        std::priority_queue<std::pair<float, id_t>> top_candidates;
+        std::priority_queue<std::pair<float, id_t>> candidate_set;
+        float lower_bound = space->distance(q_data, q_len, addr_data(ep_id), element_lens[ep_id]);
         top_candidates.emplace(lower_bound, ep_id);
         candidate_set.emplace(-lower_bound, ep_id);
         visited_list->visit(ep_id);
@@ -196,42 +185,27 @@ public:
 
             linklist_t* ll = addr_linklist(cur_id, level);
             int size = get_ll_size(ll);
-            vid_t* neighbors = get_ll_neighbors(ll);
+            id_t* neighbors = get_ll_neighbors(ll);
 
             if (is_search) {
                 metric_hops++;
             }
 
-#ifdef USE_SSE
-            _mm_prefetch((char*)(visited_list->mass + neighbors[0]), _MM_HINT_T0);
-            _mm_prefetch((char*)(visited_list->mass + neighbors[0] + 64), _MM_HINT_T0);
-            _mm_prefetch(addr_data(neighbors[0]), _MM_HINT_T0);
-            _mm_prefetch((char*)neighbors, _MM_HINT_T0);
-#endif
-
             for (int i = 0; i < size; i++) {
-#ifdef USE_SSE
-                _mm_prefetch((char*)(visited_list->mass + neighbors[i + 1]), _MM_HINT_T0);
-                _mm_prefetch(addr_data(neighbors[i + 1]), _MM_HINT_T0);
-#endif
-
-                vid_t nei_id = neighbors[i];
+                id_t nei_id = neighbors[i];
                 if (visited_list->is_visited(nei_id)) {
                     continue;
                 }
                 visited_list->visit(nei_id);
 
-                dist_t dist = fstdistfunc(query, addr_data(nei_id), dist_func_param);
+                float dist = space->distance(q_data, q_len, addr_data(nei_id), element_lens[nei_id]);
 
                 if (is_search) {
-                    metric_distance_computations++;
+                    metric_distance_computations += q_len * element_lens[nei_id];
                 }
 
                 if (top_candidates.size() < ef_ || dist < lower_bound) {
                     candidate_set.emplace(-dist, nei_id);
-#ifdef USE_SSE
-                    _mm_prefetch(addr_data(candidate_set.top().second), _MM_HINT_T0);
-#endif
                     top_candidates.emplace(dist, nei_id);
                     if (top_candidates.size() > ef_) {
                         top_candidates.pop();
@@ -244,48 +218,27 @@ public:
         return top_candidates;
     }
 
-    void filter_neighbors(vid_t cur_id, std::priority_queue<std::pair<dist_t, vid_t>>& top_candidates) const {
-        sid_t sid = outer_index->v2s[cur_id];
-        std::vector<std::pair<dist_t, vid_t>> filtered;
-
-        while (!top_candidates.empty()) {
-            auto [dist, id] = top_candidates.top();
-            top_candidates.pop();
-            if (sid != outer_index->v2s[id]) {
-                filtered.emplace_back(dist, id);
-            }
-        }
-
-        for (const auto& pair : filtered) {
-            top_candidates.push(pair);
-        }
-    }
-
-    void get_neighbors_by_heuristic2(vid_t cur_id, std::priority_queue<std::pair<dist_t, vid_t>>& top_candidates,
-                                     size_t M, int level) const {
+    void get_neighbors_by_heuristic2(id_t cur_id, std::priority_queue<std::pair<float, id_t>>& top_candidates,
+                                     size_t M) const {
         if (top_candidates.size() < M) {
             return;
         }
 
-        if (unlink_same_seq && level == 0) {
-            filter_neighbors(cur_id, top_candidates);
-        }
-
-        std::priority_queue<std::pair<dist_t, vid_t>> queue_closest;
-        std::vector<std::pair<dist_t, vid_t>> return_list;
+        std::priority_queue<std::pair<float, id_t>> queue_closest;
+        std::vector<std::pair<float, id_t>> return_list;
 
         while (!top_candidates.empty()) {
             queue_closest.emplace(-top_candidates.top().first, top_candidates.top().second);
             top_candidates.pop();
         }
 
-        // 防止三角形长边：如果 C-A > C-B 且 C-A > B-A，则不连 C-A，通过 A-B-C 访问
         while (!queue_closest.empty() && return_list.size() < M) {
             auto [cur_dist, cur_id] = queue_closest.top();
             queue_closest.pop();
             bool good = true;
             for (auto& [_, other_id] : return_list) {
-                dist_t dist = fstdistfunc(addr_data(cur_id), addr_data(other_id), dist_func_param);
+                float dist = space->distance(addr_data(cur_id), element_lens[cur_id], addr_data(other_id),
+                                             element_lens[other_id]);
                 if (dist < -cur_dist) {
                     good = false;
                     break;
@@ -301,22 +254,22 @@ public:
         }
     }
 
-    vid_t mutually_connect_new_element(vid_t cur_id, std::priority_queue<std::pair<dist_t, vid_t>>& top_candidates,
-                                       int level) {
-        get_neighbors_by_heuristic2(cur_id, top_candidates, M, level);
+    id_t mutually_connect_new_element(id_t cur_id, std::priority_queue<std::pair<float, id_t>>& top_candidates,
+                                      int level) {
+        get_neighbors_by_heuristic2(cur_id, top_candidates, M);
 
-        std::vector<vid_t> selected_neighbors;
+        std::vector<id_t> selected_neighbors;
         selected_neighbors.reserve(M);
         while (!top_candidates.empty()) {
             selected_neighbors.push_back(top_candidates.top().second);
             top_candidates.pop();
         }
 
-        vid_t next_id = selected_neighbors.back();
+        id_t next_id = selected_neighbors.back();
 
         linklist_t* ll = addr_linklist(cur_id, level);
         set_ll_size(ll, selected_neighbors.size());
-        vid_t* neighbors = get_ll_neighbors(ll);
+        id_t* neighbors = get_ll_neighbors(ll);
         for (int i = 0; i < selected_neighbors.size(); i++) {
             assert(neighbors[i] == 0);
             assert(level <= element_levels[selected_neighbors[i]]);
@@ -326,25 +279,27 @@ public:
 
         size_t level_M = level == 0 ? max_M0 : max_M;
         for (int i = 0; i < selected_neighbors.size(); i++) {
-            vid_t nei_id = selected_neighbors[i];
+            id_t nei_id = selected_neighbors[i];
 
             linklist_t* nei_ll = addr_linklist(nei_id, level);
             int nei_size = get_ll_size(nei_ll);
-            vid_t* nei_neighbors = get_ll_neighbors(nei_ll);
+            id_t* nei_neighbors = get_ll_neighbors(nei_ll);
 
             assert(nei_size <= level_M);
             if (nei_size < level_M) {
                 set_ll_size(nei_ll, nei_size + 1);
                 nei_neighbors[nei_size] = cur_id;
             } else {
-                std::priority_queue<std::pair<dist_t, vid_t>> candidates;
-                dist_t dist = fstdistfunc(addr_data(nei_id), addr_data(cur_id), dist_func_param);
+                std::priority_queue<std::pair<float, id_t>> candidates;
+                float dist =
+                    space->distance(addr_data(nei_id), element_lens[nei_id], addr_data(cur_id), element_lens[cur_id]);
                 candidates.emplace(dist, cur_id);
                 for (int j = 0; j < nei_size; j++) {
-                    dist = fstdistfunc(addr_data(nei_id), addr_data(nei_neighbors[j]), dist_func_param);
+                    dist = space->distance(addr_data(nei_id), element_lens[nei_id], addr_data(nei_neighbors[j]),
+                                           element_lens[nei_neighbors[j]]);
                     candidates.emplace(dist, nei_neighbors[j]);
                 }
-                get_neighbors_by_heuristic2(nei_id, candidates, level_M, level);
+                get_neighbors_by_heuristic2(nei_id, candidates, level_M);
 
                 nei_size = 0;
                 while (!candidates.empty()) {
@@ -358,14 +313,15 @@ public:
         return next_id;
     }
 
-    void add_point(const void* query, vid_t vid) {
-        vid_t cur_id = vid;
+    void add_point(const float* data, int len, id_t vid) {
+        id_t cur_id = vid;
         cur_elements++;
         int cur_level = get_random_level();
         element_levels[cur_id] = cur_level;
+        element_lens[cur_id] = len;
 
-        memset(addr_element(cur_id), 0, size_element);
-        memcpy(addr_data(cur_id), query, data_size);
+        elements[cur_id] = (char*)malloc(size_links_level0 + space->data_size * len);
+        memcpy(addr_data(cur_id), data, space->data_size * len);
 
         if (cur_level > 0) {
             linklists[cur_id] = (char*)malloc(size_links_level * cur_level);
@@ -378,14 +334,14 @@ public:
             return;
         }
 
-        vid_t ep_id = enterpoint;
+        id_t ep_id = enterpoint;
 
         if (cur_level < max_level) {
-            ep_id = search_down_to_level<false>(enterpoint, query, cur_level);
+            ep_id = search_down_to_level<false>(enterpoint, data, len, cur_level);
         }
 
         for (int level = std::min(cur_level, max_level); level >= 0; level--) {
-            auto top_candidates = search_level<false>(ep_id, query, level);
+            auto top_candidates = search_level<false>(ep_id, data, len, level);
             ep_id = mutually_connect_new_element(cur_id, top_candidates, level);
         }
 
@@ -395,9 +351,9 @@ public:
         }
     }
 
-    std::priority_queue<std::pair<dist_t, vid_t>> search_knn(const void* query, size_t k) {
-        vid_t ep_id = search_down_to_level<true>(enterpoint, query, 0);
-        auto top_candidates = search_level<true>(ep_id, query, 0);
+    std::priority_queue<std::pair<float, id_t>> search_knn(const float* query, int len, size_t k) {
+        id_t ep_id = search_down_to_level<true>(enterpoint, query, len, 0);
+        auto top_candidates = search_level<true>(ep_id, query, len, 0);
         while (top_candidates.size() > k) {
             top_candidates.pop();
         }

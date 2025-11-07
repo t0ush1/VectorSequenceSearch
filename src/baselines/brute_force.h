@@ -6,7 +6,7 @@ namespace vss {
 
 class BruteForceIndex : public RerankIndex {
 public:
-    BruteForceIndex(int dim, SimMetric sim_metric) : RerankIndex(dim, sim_metric) {}
+    BruteForceIndex(int dim, VSSSpace* space) : RerankIndex(dim, space) {}
 
     void build_vectors(const float* data, int size) override {}
 
